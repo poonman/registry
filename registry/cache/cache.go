@@ -2,6 +2,7 @@
 package cache
 
 import (
+	"fmt"
 	"math"
 	"math/rand"
 	"sync"
@@ -254,13 +255,19 @@ func (c *cache) update(domain string, res *registry.Result) {
 		return
 	}
 
+	fmt.Printf("res.service:%+v\n", res.Service)
+
+	fmt.Println("watched: ", c.watched)
+
 	// only save watched services since the service using the cache may only depend on a handful
 	// of other services
 	c.RLock()
-	if _, ok := c.watched[res.Service.Name]; !ok {
+	if _, ok := c.watched[domain]; !ok {
 		c.RUnlock()
 		return
 	}
+
+	fmt.Println("has watched...")
 
 	// we're not going to cache anything unless there was already a lookup
 	services, ok := c.services[domain][res.Service.Name]
@@ -269,6 +276,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 		return
 	}
 
+	fmt.Println("has service...")
 	c.RUnlock()
 
 	if len(res.Service.Nodes) == 0 {
@@ -278,6 +286,8 @@ func (c *cache) update(domain string, res *registry.Result) {
 		}
 		return
 	}
+
+	fmt.Println("has service nodes ...")
 
 	// existing service found
 	var service *registry.Service
@@ -313,6 +323,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 		services[index] = res.Service
 		c.set(domain, res.Service.Name, services)
 	case "delete":
+		fmt.Println("delete...")
 		if service == nil {
 			return
 		}
@@ -323,6 +334,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 		for _, cur := range service.Nodes {
 			var seen bool
 			for _, del := range res.Service.Nodes {
+				fmt.Println("cur: ", cur.Id, " del: ", del.Id)
 				if del.Id == cur.Id {
 					seen = true
 					break
@@ -345,6 +357,7 @@ func (c *cache) update(domain string, res *registry.Result) {
 
 		// only have one thing to delete
 		// nuke the thing
+		fmt.Println("service len: ", len(services), service.Name)
 		if len(services) == 1 {
 			c.del(domain, service.Name)
 			return
@@ -471,6 +484,7 @@ func (c *cache) watch(domain string, w registry.Watcher) error {
 			return err
 		}
 
+		fmt.Printf("res: %+v\n", res)
 		// reset the error status since we succeeded
 		if err := c.getStatus(); err != nil {
 			// reset status

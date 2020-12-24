@@ -7,6 +7,8 @@ import (
 	"github.com/poonman/registry/registry/cache"
 	"github.com/poonman/registry/registry/etcd"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
@@ -16,6 +18,9 @@ var (
 )
 
 func main() {
+
+	flag.Parse()
+
 	endpoints := []string{
 		"192.168.81.51:2379",
 		"192.168.81.51:3379",
@@ -30,7 +35,7 @@ func main() {
 
 	c := cache.New(r)
 
-	err = c.Register(&registry.Service{
+	s := &registry.Service{
 		Name:      *localName,
 		Version:   "0.0.0",
 		Metadata:  nil,
@@ -42,29 +47,54 @@ func main() {
 				Metadata: nil,
 			},
 		},
-	})
+	}
+
+	err = c.Register(s)
 
 	if err != nil {
 		fmt.Println("err: ", err)
 		os.Exit(1)
 	}
 
-	for {
-		ss, err := c.GetService(*remoteName)
-		if err != nil {
-			fmt.Println("Failed to get service. ", err)
+
+	fmt.Println("local: ", *localName)
+	fmt.Println("remote: ", *remoteName)
+
+	go func() {
+		for {
+			ss, err := c.GetService(*remoteName)
+			if err != nil {
+				fmt.Println("Failed to get service. ", err)
+				time.Sleep(time.Second)
+				continue
+			}
+
+
+
+			for _, s := range ss {
+				fmt.Println("Success. ", *s)
+			}
+
 			time.Sleep(time.Second)
-			continue
 		}
+	}()
 
-		fmt.Println("get begin...")
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGHUP, syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT)
+	for {
+		sig := <-ch
+		switch sig {
+		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
 
-		for _, s := range ss {
-			fmt.Println(*s)
+			err = c.Deregister(s)
+			if err != nil {
+				fmt.Println("Failed to deregister. ", err)
+			}
+			time.Sleep(time.Second)
+			return
+		case syscall.SIGHUP:
+		default:
+			return
 		}
-
-		fmt.Println("get end.....")
-
-		time.Sleep(time.Second)
 	}
 }

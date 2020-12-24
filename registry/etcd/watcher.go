@@ -3,6 +3,7 @@ package etcd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -61,6 +62,9 @@ func (ew *etcdWatcher) Next() (*registry.Result, error) {
 			return nil, errors.New("could not get next")
 		}
 		for _, ev := range wresp.Events {
+
+			fmt.Printf("ev: %+v\n", *ev)
+
 			service := decode(ev.Kv.Value)
 			var action string
 
