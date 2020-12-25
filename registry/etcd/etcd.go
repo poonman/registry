@@ -290,19 +290,12 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 
 	// renew the lease if it exists
 	if leaseID > 0 {
-		//if logger.V(logger.TraceLevel, logger.DefaultLogger) {
-		//	logger.Tracef("Renewing existing lease for %s %d", s.Name, leaseID)
-		//}
 
 		var err error
 		if ch, err = e.client.KeepAlive(context.TODO(), leaseID); err != nil {
 			if err != rpctypes.ErrLeaseNotFound {
 				return err
 			}
-
-			//if logger.V(logger.TraceLevel, logger.DefaultLogger) {
-			//	logger.Tracef("Lease not found for %s %d", s.Name, leaseID)
-			//}
 
 			// lease not found do register
 			leaseNotFound = true
