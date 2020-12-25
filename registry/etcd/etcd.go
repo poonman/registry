@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"go.uber.org/zap"
+	"fmt"
 	"net"
 	"path"
 	"sort"
@@ -22,8 +23,8 @@ import (
 )
 
 const (
-	prefix        = "/micro/registry/"
-	defaultDomain = "micro"
+	prefix        = "/doom/registry/"
+	defaultDomain = "doom"
 )
 
 type etcdRegistry struct {
@@ -144,7 +145,7 @@ func configure(e *etcdRegistry, opts ...registry.Option) error {
 
 // getName returns the domain and name
 // it returns false if there's an issue
-// the key is a path of /prefix/domain/name/id e.g /micro/registry/domain/service/uuid
+// the key is a path of /prefix/domain/name/id e.g /doom/registry/domain/service/uuid
 func getName(key, prefix string) (string, string, bool) {
 	// strip the prefix from keys
 	key = strings.TrimPrefix(key, prefix)
@@ -285,6 +286,7 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 	}
 
 	var leaseNotFound bool
+	var ch <-chan *clientv3.LeaseKeepAliveResponse
 
 	// renew the lease if it exists
 	if leaseID > 0 {
@@ -292,7 +294,8 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 		//	logger.Tracef("Renewing existing lease for %s %d", s.Name, leaseID)
 		//}
 
-		if _, err := e.client.KeepAliveOnce(context.TODO(), leaseID); err != nil {
+		var err error
+		if ch, err = e.client.KeepAlive(context.TODO(), leaseID); err != nil {
 			if err != rpctypes.ErrLeaseNotFound {
 				return err
 			}
@@ -303,6 +306,9 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 
 			// lease not found do register
 			leaseNotFound = true
+			fmt.Println("lease not found")
+		} else {
+			fmt.Println("lease has found")
 		}
 	}
 
@@ -317,11 +323,14 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 	v, ok := e.register[options.Domain][s.Name+node.Id]
 	e.RUnlock()
 
+	fmt.Println("register begin...")
 	// the service is unchanged, skip registering
 	if ok && v == h && !leaseNotFound {
 		//if logger.V(logger.TraceLevel, logger.DefaultLogger) {
 		//	logger.Tracef("Service %s node %s unchanged skipping registration", s.Name, node.Id)
 		//}
+		fmt.Println("no need register")
+		go e.redo(ch, s, node, opts...)
 		return nil
 	}
 
@@ -348,24 +357,24 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 		// get a lease used to expire keys since we have a ttl
 		lgr, err = e.client.Grant(ctx, int64(options.TTL.Seconds()))
 		if err != nil {
+			fmt.Println("Failed to grant lease. ", err)
 			return err
 		}
+	}
+
+	if ch, err = e.client.KeepAlive(context.TODO(), lgr.ID); err != nil {
+		fmt.Println("Failed to keep alive. ", err, lgr.ID)
+		return err
 	}
 
 	// create an entry for the node
 	var putOpts []clientv3.OpOption
 	if lgr != nil {
 		putOpts = append(putOpts, clientv3.WithLease(lgr.ID))
-
-		//if logger.V(logger.TraceLevel, logger.DefaultLogger) {
-		//	logger.Tracef("Registering %s id %s with lease %v and leaseID %v and ttl %v", service.Name, node.Id, lgr, lgr.ID, options.TTL)
-		//}
 	}
-	//else if logger.V(logger.TraceLevel, logger.DefaultLogger) {
-	//	logger.Tracef("Registering %s id %s without lease", service.Name, node.Id)
-	//}
 
 	key := nodePath(options.Domain, s.Name, node.Id)
+	fmt.Println("before put...............................")
 	if _, err = e.client.Put(ctx, key, encode(service), putOpts...); err != nil {
 		return err
 	}
@@ -378,6 +387,69 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 		e.leases[options.Domain][s.Name+node.Id] = lgr.ID
 	}
 	e.Unlock()
+
+	go e.redo(ch, s, node, opts...)
+
+	return nil
+}
+
+func (e *etcdRegistry) redo(ch <-chan *clientv3.LeaseKeepAliveResponse, s *registry.Service, node *registry.Node, opts ...registry.RegisterOption) {
+	for {
+		lr, ok := <- ch
+		if ok {
+			fmt.Println("xxxxxxxxxxxxxx: ", lr.ID, lr.TTL)
+		} else {
+			fmt.Println("chan closed")
+			_ = e.deregister(s)
+			break
+		}
+	}
+
+	go func() {
+		for {
+			err := e.registerNode(s, node, opts...)
+			if err != nil {
+				time.Sleep(5*time.Second)
+			} else {
+				break
+			}
+		}
+
+	}()
+}
+
+
+func (e *etcdRegistry) deregister(s *registry.Service, opts ...registry.DeregisterOption) error {
+	if len(s.Nodes) == 0 {
+		return errors.New("Require at least one node")
+	}
+
+	// parse the options
+	var options registry.DeregisterOptions
+	for _, o := range opts {
+		o(&options)
+	}
+	if len(options.Domain) == 0 {
+		options.Domain = defaultDomain
+	}
+
+	for _, node := range s.Nodes {
+		e.Lock()
+		// delete our hash of the service
+		nodes, ok := e.register[options.Domain]
+		if ok {
+			delete(nodes, s.Name+node.Id)
+			e.register[options.Domain] = nodes
+		}
+
+		// delete our lease of the service
+		leases, ok := e.leases[options.Domain]
+		if ok {
+			delete(leases, s.Name+node.Id)
+			e.leases[options.Domain] = leases
+		}
+		e.Unlock()
+	}
 
 	return nil
 }
@@ -415,10 +487,6 @@ func (e *etcdRegistry) Deregister(s *registry.Service, opts ...registry.Deregist
 
 		ctx, cancel := context.WithTimeout(context.Background(), e.options.Timeout)
 		defer cancel()
-
-		//if logger.V(logger.TraceLevel, logger.DefaultLogger) {
-		//	logger.Tracef("Deregistering %s id %s", s.Name, node.Id)
-		//}
 
 		if _, err := e.client.Delete(ctx, nodePath(options.Domain, s.Name, node.Id)); err != nil {
 			return err
@@ -460,7 +528,7 @@ func (e *etcdRegistry) GetService(name string, opts ...registry.GetOption) ([]*r
 
 	var results []*mvccpb.KeyValue
 
-	// TODO: refactorout wildcard, this is an incredibly expensive operation
+	// TODO: refactor out wildcard, this is an incredibly expensive operation
 	if options.Domain == registry.WildcardDomain {
 		rsp, err := e.client.Get(ctx, prefix, clientv3.WithPrefix(), clientv3.WithSerializable())
 		if err != nil {

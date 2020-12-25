@@ -49,7 +49,7 @@ func main() {
 		},
 	}
 
-	err = c.Register(s)
+	err = c.Register(s, registry.RegisterTTL(5*time.Second))
 
 	if err != nil {
 		fmt.Println("err: ", err)
@@ -98,3 +98,4 @@ func main() {
 		}
 	}
 }
+
