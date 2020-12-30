@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	"log"
 )
 
 func main() {
@@ -17,8 +18,14 @@ func main() {
 	//	"192.168.81.51:4379",
 	//}
 
-	endpoints := []string {
-		"slb-pre-server.ifere.com:31334",
+	//endpoints := []string {
+	//	"slb-pre-server.ifere.com:31334",
+	//}
+
+	endpoints := []string{
+		`192.168.203.42:2400`,
+		`192.168.203.42:2401`,
+		`192.168.203.42:2402`,
 	}
 
 	//endpoints := []string {
@@ -33,11 +40,12 @@ func main() {
 	r := etcd.NewRegistry(registry.Addrs(endpoints...))
 	err := r.Init()
 	if err != nil {
-		fmt.Println("err: ", err)
+		log.Println("err: ", err)
 		os.Exit(1)
 	}
 
-	for i:=0; i<500; i++ {
+	size := 100
+	for i:=0; i<size; i++ {
 
 		go func(j int) {
 			name := fmt.Sprintf("svc-%d", j)
@@ -54,26 +62,26 @@ func main() {
 					},
 				},
 			}
-			err = r.Register(s)
+			err = r.Register(s, registry.RegisterTTL(5*time.Second))
 			if err != nil {
-				fmt.Println("Failed to register. i: ", j, ". err: ", err)
+				log.Println("Failed to register. i: ", j, ". err: ", err)
 			}
 
-			fmt.Println("register success. name: ", name)
+			log.Println("register success. name: ", name)
 
-			w, err := r.Watch(registry.WatchService(name))
+			w, err := r.Watch()
 			if err != nil {
-				fmt.Println("Failed to watch. i: ", j, ". err: ", err)
+				log.Println("Failed to watch. i: ", j, ". err: ", err)
 				return
 			}
 
 			res, err := w.Next()
 			if err != nil {
-				fmt.Println("Failed to watch next. i: ", j, ". err: ", err)
+				log.Println("Failed to watch next. i: ", j, ". err: ", err)
 				return
 			}
 
-			fmt.Println("action: ", res.Action, ", name: ", res.Service.Name)
+			log.Println("action: ", res.Action, ", name: ", res.Service.Name)
 		}(i)
 
 	}
@@ -85,7 +93,7 @@ func main() {
 		switch sig {
 		case syscall.SIGQUIT, syscall.SIGTERM, syscall.SIGINT:
 
-			for i:=0; i<500;i++ {
+			for i:=0; i<size;i++ {
 				name := fmt.Sprintf("svc-%d", i)
 				s := &registry.Service{
 					Name:      name,
@@ -102,7 +110,7 @@ func main() {
 				}
 				err = r.Deregister(s)
 				if err != nil {
-					fmt.Println("Failed to deregister. ", err)
+					log.Println("Failed to deregister. ", err)
 				}
 			}
 

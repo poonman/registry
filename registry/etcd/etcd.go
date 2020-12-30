@@ -6,8 +6,9 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"errors"
-	"go.uber.org/zap"
 	"fmt"
+	"go.uber.org/zap"
+	"log"
 	"net"
 	"path"
 	"sort"
@@ -18,8 +19,8 @@ import (
 	"github.com/coreos/etcd/clientv3"
 	"github.com/coreos/etcd/etcdserver/api/v3rpc/rpctypes"
 	"github.com/coreos/etcd/mvcc/mvccpb"
-	"github.com/poonman/registry/registry"
 	hash "github.com/mitchellh/hashstructure"
+	"github.com/poonman/registry/registry"
 )
 
 const (
@@ -368,9 +369,12 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 
 	key := nodePath(options.Domain, s.Name, node.Id)
 	fmt.Println("before put...............................")
-	if _, err = e.client.Put(ctx, key, encode(service), putOpts...); err != nil {
+	var putRsp *clientv3.PutResponse
+	if putRsp, err = e.client.Put(ctx, key, encode(service), putOpts...); err != nil {
 		return err
 	}
+
+	node.Revision = putRsp.Header.Revision
 
 	e.Lock()
 	// save our hash of the service
@@ -388,11 +392,11 @@ func (e *etcdRegistry) registerNode(s *registry.Service, node *registry.Node, op
 
 func (e *etcdRegistry) redo(ch <-chan *clientv3.LeaseKeepAliveResponse, s *registry.Service, node *registry.Node, opts ...registry.RegisterOption) {
 	for {
-		lr, ok := <- ch
+		_, ok := <- ch
 		if ok {
-			fmt.Println("xxxxxxxxxxxxxx: ", lr.ID, lr.TTL)
+			//fmt.Println("xxxxxxxxxxxxxx: ", lr.ID, lr.TTL)
 		} else {
-			fmt.Println("chan closed")
+			log.Println("chan closed")
 			_ = e.deregister(s)
 			break
 		}

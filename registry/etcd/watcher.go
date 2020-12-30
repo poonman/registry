@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -41,6 +42,7 @@ func newEtcdWatcher(c *clientv3.Client, timeout time.Duration, opts ...registry.
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	fmt.Println("path: ", watchPath)
 	w := c.Watch(ctx, watchPath, clientv3.WithPrefix(), clientv3.WithPrevKV())
 	stop := make(chan bool, 1)
 
@@ -63,7 +65,7 @@ func (ew *etcdWatcher) Next() (*registry.Result, error) {
 		}
 		for _, ev := range wresp.Events {
 
-			fmt.Printf("ev: %+v\n", *ev)
+			log.Printf("ev: %+v\n", *ev)
 
 			service := decode(ev.Kv.Value)
 			var action string
